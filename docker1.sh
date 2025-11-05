@@ -19,35 +19,53 @@ fi
 # 如果 daemon.json 不存在则创建空文件
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "{}" > "$CONFIG_FILE"
+    echo "⚠️ 未检测到 daemon.json，已创建新文件。"
 fi
 
-# 如果文件不是合法 JSON，则强制重置
-if ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
-    echo "⚠️ 检测到 daemon.json 内容异常，已重置为标准结构。"
-    echo "{}" > "$CONFIG_FILE"
+# 检查 daemon.json 是否是合法 JSON
+if ! jq empty "$CONFIG_FILE" 2>/dev/null; then
+    echo "⚠️ 检测到 daemon.json 格式错误，正在重置为标准结构..."
+    cat <<EOF > "$CONFIG_FILE"
+{
+  "exec-opts": ["native.cgroupdriver=cgroupfs"],
+  "registry-mirrors": [],
+  "insecure-registries": [],
+  "runtimes": {
+    "nvidia": {
+      "path": "/var/lib/vastai_kaalia/latest/kaalia_docker_shim",
+      "runtimeArgs": []
+    }
+  }
+}
+EOF
 fi
 
-# 如果 registry-mirrors 键存在但类型不是数组，重置为数组
-if jq -e '.["registry-mirrors"] | type == "array"' "$CONFIG_FILE" >/dev/null 2>&1; then
-    :
-else
-    jq '.["registry-mirrors"] = []' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-fi
-
-# 如果 insecure-registries 键存在但类型不是数组，重置为数组
-if jq -e '.["insecure-registries"] | type == "array"' "$CONFIG_FILE" >/dev/null 2>&1; then
-    :
-else
-    jq '.["insecure-registries"] = []' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-fi
+# 如果 registry-mirrors 或 insecure-registries 是字符串，则强制重置为数组
+jq '
+  if (type == "object") then
+    if (.["registry-mirrors"] | type != "array") then .["registry-mirrors"] = [] else . end |
+    if (.["insecure-registries"] | type != "array") then .["insecure-registries"] = [] else . end
+  else
+    {
+      "exec-opts": ["native.cgroupdriver=cgroupfs"],
+      "registry-mirrors": [],
+      "insecure-registries": [],
+      "runtimes": {
+        "nvidia": {
+          "path": "/var/lib/vastai_kaalia/latest/kaalia_docker_shim",
+          "runtimeArgs": []
+        }
+      }
+    }
+  end
+' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
 # 备份原文件
 cp "$CONFIG_FILE" "$BACKUP_FILE"
 echo "✅ 已备份原配置文件到: $BACKUP_FILE"
 
-# 生成临时文件并更新
+# 使用 jq 追加（防止重复）
 tmp_file=$(mktemp)
-
 jq --arg REG "http://$REGISTRY" --arg INSEC "$REGISTRY" '
   .["registry-mirrors"] = (.["registry-mirrors"] // []) |
   if ($REG | IN(.["registry-mirrors"][])) then . else .["registry-mirrors"] += [$REG] end
