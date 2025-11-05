@@ -16,36 +16,44 @@ if ! command -v jq >/dev/null 2>&1; then
     apt update -y && apt install -y jq
 fi
 
-# 如果文件不存在则创建空 JSON
+# 如果 daemon.json 不存在则创建空文件
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "{}" > "$CONFIG_FILE"
-    echo "⚠️ 未检测到 daemon.json，已创建新文件。"
+fi
+
+# 如果文件不是合法 JSON，则强制重置
+if ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
+    echo "⚠️ 检测到 daemon.json 内容异常，已重置为标准结构。"
+    echo "{}" > "$CONFIG_FILE"
+fi
+
+# 如果 registry-mirrors 键存在但类型不是数组，重置为数组
+if jq -e '.["registry-mirrors"] | type == "array"' "$CONFIG_FILE" >/dev/null 2>&1; then
+    :
+else
+    jq '.["registry-mirrors"] = []' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+fi
+
+# 如果 insecure-registries 键存在但类型不是数组，重置为数组
+if jq -e '.["insecure-registries"] | type == "array"' "$CONFIG_FILE" >/dev/null 2>&1; then
+    :
+else
+    jq '.["insecure-registries"] = []' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 fi
 
 # 备份原文件
 cp "$CONFIG_FILE" "$BACKUP_FILE"
 echo "✅ 已备份原配置文件到: $BACKUP_FILE"
 
-# 生成临时文件
+# 生成临时文件并更新
 tmp_file=$(mktemp)
 
-# 使用 jq 修改 JSON，避免重复添加
 jq --arg REG "http://$REGISTRY" --arg INSEC "$REGISTRY" '
-  # 确保 registry-mirrors 存在
-  .["registry-mirrors"] = (.["registry-mirrors"] // [])
-  | if (.["registry-mirrors"] | index($REG)) == null then
-        .["registry-mirrors"] += [$REG]
-    else
-        .
-    end
+  .["registry-mirrors"] = (.["registry-mirrors"] // []) |
+  if ($REG | IN(.["registry-mirrors"][])) then . else .["registry-mirrors"] += [$REG] end
   |
-  # 确保 insecure-registries 存在
-  .["insecure-registries"] = (.["insecure-registries"] // [])
-  | if (.["insecure-registries"] | index($INSEC)) == null then
-        .["insecure-registries"] += [$INSEC]
-    else
-        .
-    end
+  .["insecure-registries"] = (.["insecure-registries"] // []) |
+  if ($INSEC | IN(.["insecure-registries"][])) then . else .["insecure-registries"] += [$INSEC] end
 ' "$CONFIG_FILE" > "$tmp_file" && mv "$tmp_file" "$CONFIG_FILE"
 
 echo "✅ 已更新 $CONFIG_FILE："
