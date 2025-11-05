@@ -32,12 +32,20 @@ tmp_file=$(mktemp)
 # 使用 jq 修改 JSON，避免重复添加
 jq --arg REG "http://$REGISTRY" --arg INSEC "$REGISTRY" '
   # 确保 registry-mirrors 存在
-  .["registry-mirrors"] = (.["registry-mirrors"] // []) |
-  if ($REG | IN(.["registry-mirrors"][])) then . else .["registry-mirrors"] += [$REG] end
+  .["registry-mirrors"] = (.["registry-mirrors"] // [])
+  | if (.["registry-mirrors"] | index($REG)) == null then
+        .["registry-mirrors"] += [$REG]
+    else
+        .
+    end
   |
   # 确保 insecure-registries 存在
-  .["insecure-registries"] = (.["insecure-registries"] // []) |
-  if ($INSEC | IN(.["insecure-registries"][])) then . else .["insecure-registries"] += [$INSEC] end
+  .["insecure-registries"] = (.["insecure-registries"] // [])
+  | if (.["insecure-registries"] | index($INSEC)) == null then
+        .["insecure-registries"] += [$INSEC]
+    else
+        .
+    end
 ' "$CONFIG_FILE" > "$tmp_file" && mv "$tmp_file" "$CONFIG_FILE"
 
 echo "✅ 已更新 $CONFIG_FILE："
